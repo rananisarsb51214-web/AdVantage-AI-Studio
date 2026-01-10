@@ -1,28 +1,50 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Layout, 
   PlusSquare, 
   Image as ImageIcon, 
   Settings, 
   CreditCard, 
-  Menu,
   Zap,
-  Bookmark
+  Video,
+  MessageSquare,
+  Mic,
+  Key
 } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Studio from './components/Studio';
 import AssetLibrary from './components/AssetLibrary';
 import Payments from './components/Payments';
-import Branding from './components/Branding';
-import { BrandSettings } from './types';
+import AIChat from './components/AIChat';
+import VideoLab from './components/VideoLab';
+import LiveAssistant from './components/LiveAssistant';
 
-type View = 'dashboard' | 'studio' | 'assets' | 'branding' | 'payments' | 'settings';
+type View = 'dashboard' | 'studio' | 'assets' | 'payments' | 'settings' | 'video' | 'chat' | 'live';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeBrand, setActiveBrand] = useState<BrandSettings | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio?.hasSelectedApiKey) {
+        const has = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(has);
+      } else {
+        setHasApiKey(true); // Fallback if outside AI Studio environment
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+    }
+  };
 
   const NavItem: React.FC<{ 
     view: View; 
@@ -38,7 +60,7 @@ const App: React.FC = () => {
       }`}
     >
       <Icon size={20} />
-      <span className="font-medium">{label}</span>
+      {isSidebarOpen && <span className="font-medium">{label}</span>}
     </button>
   );
 
@@ -60,10 +82,24 @@ const App: React.FC = () => {
         <nav className="flex-1 px-4 py-6 space-y-2">
           <NavItem view="dashboard" icon={Layout} label="Dashboard" />
           <NavItem view="studio" icon={PlusSquare} label="Ad Studio" />
-          <NavItem view="branding" icon={Bookmark} label="Branding" />
+          <NavItem view="video" icon={Video} label="Video Lab" />
+          <NavItem view="chat" icon={MessageSquare} label="AI Chat" />
+          <NavItem view="live" icon={Mic} label="Assistant" />
           <NavItem view="assets" icon={ImageIcon} label="Asset Library" />
           <NavItem view="payments" icon={CreditCard} label="Billing" />
         </nav>
+
+        {!hasApiKey && (
+          <div className="p-4">
+            <button 
+              onClick={handleSelectKey}
+              className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-amber-600/20 text-amber-400 border border-amber-500/20 rounded-xl text-sm font-bold hover:bg-amber-600/30 transition-all"
+            >
+              <Key size={16} />
+              {isSidebarOpen && <span>Connect Key</span>}
+            </button>
+          </div>
+        )}
 
         <div className="p-4 border-t border-zinc-800">
           <NavItem view="settings" icon={Settings} label="Settings" />
@@ -72,7 +108,6 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0b] overflow-hidden relative">
-        {/* Background Gradient */}
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-600/5 blur-[120px] rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
         <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-purple-600/5 blur-[120px] rounded-full translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
 
@@ -82,21 +117,15 @@ const App: React.FC = () => {
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 md:block hidden"
             >
-              <Menu size={20} />
+              <Layout size={20} />
             </button>
             <h2 className="text-lg font-semibold text-zinc-200 capitalize">
               {currentView.replace('-', ' ')}
             </h2>
           </div>
           <div className="flex items-center space-x-4">
-            {activeBrand && (
-              <div className="hidden md:flex items-center space-x-2 px-3 py-1 bg-zinc-800/50 rounded-full border border-zinc-700/50">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: activeBrand.colors[0] }}></div>
-                <span className="text-xs font-medium text-zinc-300">{activeBrand.name} Active</span>
-              </div>
-            )}
             <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-600/20">
-              Upgrade Plan
+              Upgrade
             </button>
             <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center">
               <span className="text-xs font-bold text-zinc-400">JD</span>
@@ -106,14 +135,23 @@ const App: React.FC = () => {
 
         <div className="flex-1 overflow-y-auto p-6 relative">
           {currentView === 'dashboard' && <Dashboard onCreateNew={() => setCurrentView('studio')} />}
-          {currentView === 'studio' && <Studio activeBrand={activeBrand} />}
+          {currentView === 'studio' && <Studio />}
+          {currentView === 'video' && <VideoLab />}
+          {currentView === 'chat' && <AIChat />}
+          {currentView === 'live' && <LiveAssistant />}
           {currentView === 'assets' && <AssetLibrary />}
-          {currentView === 'branding' && <Branding onBrandCreated={setActiveBrand} initialSettings={activeBrand} />}
           {currentView === 'payments' && <Payments />}
           {currentView === 'settings' && (
             <div className="max-w-4xl mx-auto py-10 text-center">
               <h1 className="text-3xl font-bold mb-4">Settings</h1>
-              <p className="text-zinc-400">Account management and API configuration coming soon.</p>
+              <p className="text-zinc-400">Account management and API configuration.</p>
+              {!hasApiKey && (
+                 <div className="mt-8">
+                   <p className="text-sm text-zinc-500 mb-4">You need to select an API key from a paid GCP project to use Veo and Gemini 3 Pro features.</p>
+                   <button onClick={handleSelectKey} className="px-6 py-2 bg-white text-black font-bold rounded-lg hover:bg-zinc-200">Select API Key</button>
+                   <p className="mt-2 text-xs text-zinc-600">See <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline">billing documentation</a>.</p>
+                 </div>
+              )}
             </div>
           )}
         </div>

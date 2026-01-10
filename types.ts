@@ -27,16 +27,3 @@ export interface AdSuggestion {
   cta: string;
   colorPalette: string[];
 }
-
-export interface BrandSettings {
-  name: string;
-  mission: string;
-  values: string[];
-  usp: string;
-  colors: string[];
-  fonts: {
-    primary: string;
-    secondary: string;
-  };
-  voice: string;
-}

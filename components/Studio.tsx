@@ -15,87 +15,98 @@ import {
   Contrast as ContrastIcon,
   Maximize,
   Eraser,
-  Target,
-  Move,
-  Video,
-  Image as ImageIcon,
-  Download,
-  AlertCircle,
-  ExternalLink,
-  Wand2
+  Wand2,
+  Crop as CropIcon,
+  Check,
+  X,
+  Eye,
+  Settings2
 } from 'lucide-react';
-import { generateAdContent, generateAdImage, generateAdVideo } from '../services/gemini';
-import { Platform, AdSuggestion, BrandSettings } from '../types';
+import { generateAdContent, generateHighQualityImage, editAdImage, analyzeMedia } from '../services/gemini';
+import { Platform, AdSuggestion } from '../types';
 
-interface StudioProps {
-  activeBrand: BrandSettings | null;
+interface CropArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-const Studio: React.FC<StudioProps> = ({ activeBrand }) => {
+const Studio: React.FC = () => {
   const [platform, setPlatform] = useState<Platform>('instagram');
-  const [genMode, setGenMode] = useState<'image' | 'video'>('image');
-  const [videoAspectRatio, setVideoAspectRatio] = useState<'16:9' | '9:16'>('9:16');
   const [prompt, setPrompt] = useState('');
+  const [magicPrompt, setMagicPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [genStatus, setGenStatus] = useState('');
+  const [isMagicEditing, setIsMagicEditing] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [adContent, setAdContent] = useState<AdSuggestion | null>(null);
   const [adImage, setAdImage] = useState<string | null>(null);
-  const [adVideo, setAdVideo] = useState<string | null>(null);
+  const [originalAdImage, setOriginalAdImage] = useState<string | null>(null);
+  const [aspectRatio, setAspectRatio] = useState('1:1');
+  const [imageSize, setImageSize] = useState('1K');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const cropContainerRef = useRef<HTMLDivElement>(null);
 
   // Image Edit States
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [posX, setPosX] = useState(0);
-  const [posY, setPosY] = useState(0);
 
-  // Drag State
+  // Crop States
+  const [isCropMode, setIsCropMode] = useState(false);
+  const [cropArea, setCropArea] = useState<CropArea>({ x: 10, y: 10, width: 80, height: 80 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Sync aspect ratio with platform if not explicitly changed
-  useEffect(() => {
-    if (platform === 'instagram' || platform === 'tiktok') {
-      setVideoAspectRatio('9:16');
-    } else {
-      setVideoAspectRatio('16:9');
-    }
-  }, [platform]);
 
   const handleGenerate = async () => {
     if (!prompt) return;
     setIsGenerating(true);
-    setGenStatus('Initializing AI models...');
     resetEdits();
-    
     try {
-      if (genMode === 'image') {
-        const [content, image] = await Promise.all([
-          generateAdContent(prompt, platform, undefined, activeBrand || undefined),
-          generateAdImage(prompt, activeBrand || undefined)
-        ]);
-        setAdContent(content);
-        setAdImage(image);
-        setAdVideo(null);
-      } else {
-        const videoUrl = await generateAdVideo(
-          prompt, 
-          videoAspectRatio,
-          (status) => setGenStatus(status)
-        );
-        const content = await generateAdContent(prompt, platform, "Professional cinematic video ad", activeBrand || undefined);
-        setAdVideo(videoUrl);
-        setAdContent(content);
-        setAdImage(null);
-      }
-    } catch (error: any) {
+      const [content, image] = await Promise.all([
+        generateAdContent(prompt, platform),
+        generateHighQualityImage(prompt, aspectRatio, imageSize)
+      ]);
+      setAdContent(content);
+      setAdImage(image);
+      setOriginalAdImage(image);
+    } catch (error) {
       console.error("Generation failed", error);
-      setGenStatus(error.message || 'Generation failed. Check your API key or connection.');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleAIEdit = async () => {
+    if (!adImage || !magicPrompt) return;
+    setIsMagicEditing(true);
+    try {
+      const editedImage = await editAdImage(adImage, magicPrompt);
+      if (editedImage) {
+        setAdImage(editedImage);
+        setOriginalAdImage(editedImage);
+        setMagicPrompt('');
+      }
+    } catch (error) {
+      console.error("AI Magic Edit failed", error);
+    } finally {
+      setIsMagicEditing(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    if (!adImage) return;
+    setIsAnalyzing(true);
+    try {
+      const mime = adImage.match(/data:([^;]+);/)?.[1] || 'image/png';
+      const analysis = await analyzeMedia(adImage, mime, "Describe this image in detail and suggest a marketing hook.");
+      alert(analysis);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -104,8 +115,9 @@ const Studio: React.FC<StudioProps> = ({ activeBrand }) => {
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        setAdImage(event.target?.result as string);
-        setAdVideo(null);
+        const result = event.target?.result as string;
+        setAdImage(result);
+        setOriginalAdImage(result);
         resetEdits();
       };
       reader.readAsDataURL(file);
@@ -113,19 +125,11 @@ const Studio: React.FC<StudioProps> = ({ activeBrand }) => {
   };
 
   const handleRefine = async () => {
-    if (!adContent || !prompt) return;
+    if (!adContent) return;
     setIsGenerating(true);
-    setGenStatus('Polishing copy...');
     try {
-      const refined = await generateAdContent(
-        `Improve and polish this ad copy based on the original brief: "${prompt}". Make it more catchy and conversion-oriented.`, 
-        platform, 
-        undefined, 
-        activeBrand || undefined
-      );
+      const refined = await generateAdContent(`Refine and make this more aggressive: ${prompt}`, platform);
       setAdContent(refined);
-    } catch (error) {
-      console.error("Refinement failed", error);
     } finally {
       setIsGenerating(false);
     }
@@ -136,116 +140,93 @@ const Studio: React.FC<StudioProps> = ({ activeBrand }) => {
     setContrast(100);
     setRotation(0);
     setZoom(1);
-    setPosX(0);
-    setPosY(0);
+    setAdImage(originalAdImage);
+    setIsCropMode(false);
   };
 
   const handleRotate = () => {
     setRotation((prev) => (prev + 90) % 360);
   };
 
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (!adImage) return;
+  // Crop Logic
+  const startDrag = (e: React.MouseEvent) => {
+    if (!isCropMode) return;
     setIsDragging(true);
-    setDragStart({ x: e.clientX - posX, y: e.clientY - posY });
+    setDragStart({ x: e.clientX, y: e.clientY });
   };
 
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      setPosX(e.clientX - dragStart.x);
-      setPosY(e.clientY - dragStart.y);
-    };
+  const onDrag = (e: React.MouseEvent) => {
+    if (!isDragging || !cropContainerRef.current) return;
+    const rect = cropContainerRef.current.getBoundingClientRect();
+    const dx = ((e.clientX - dragStart.x) / rect.width) * 100;
+    const dy = ((e.clientY - dragStart.y) / rect.height) * 100;
+    setCropArea(prev => ({
+      ...prev,
+      x: Math.max(0, Math.min(100 - prev.width, prev.x + dx)),
+      y: Math.max(0, Math.min(100 - prev.height, prev.y + dy))
+    }));
+    setDragStart({ x: e.clientX, y: e.clientY });
+  };
 
-    const onMouseUp = () => {
-      setIsDragging(false);
-    };
+  const stopDrag = () => setIsDragging(false);
 
-    if (isDragging) {
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-    }
-
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+  const applyCrop = () => {
+    if (!imageRef.current || !adImage) return;
+    const img = new Image();
+    img.src = adImage;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const sourceX = (cropArea.x / 100) * img.width;
+      const sourceY = (cropArea.y / 100) * img.height;
+      const sourceWidth = (cropArea.width / 100) * img.width;
+      const sourceHeight = (cropArea.height / 100) * img.height;
+      canvas.width = sourceWidth;
+      canvas.height = sourceHeight;
+      ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+      setAdImage(canvas.toDataURL('image/png'));
+      setIsCropMode(false);
     };
-  }, [isDragging, dragStart]);
+  };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1600px] mx-auto h-full pb-10">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1600px] mx-auto h-full">
       {/* Configuration Panel */}
-      <div className="lg:col-span-4 space-y-6 flex flex-col h-full overflow-y-auto pr-2">
+      <div className="lg:col-span-4 space-y-6 flex flex-col h-full overflow-y-auto pr-2 pb-10">
         <div className="glass-effect p-6 rounded-2xl border border-zinc-800">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-white flex items-center">
-              <Sparkles className="mr-2 text-indigo-400" size={18} />
-              Studio Editor
-            </h3>
-            {activeBrand && (
-              <div className="flex items-center space-x-1 px-2 py-1 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
-                <Target size={12} className="text-emerald-400" />
-                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-tighter">Brand Optimized</span>
-              </div>
-            )}
-          </div>
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center">
+            <Sparkles className="mr-2 text-indigo-400" size={18} />
+            AI Creator (Pro)
+          </h3>
           
-          <div className="space-y-6">
-            <div>
-              <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Generation Mode</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setGenMode('image')}
-                  className={`flex items-center justify-center space-x-2 px-3 py-3 rounded-xl text-sm font-bold transition-all ${
-                    genMode === 'image' 
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
-                      : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
-                  }`}
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Resolution</label>
+                <select 
+                  value={imageSize} 
+                  onChange={(e) => setImageSize(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
-                  <ImageIcon size={18} />
-                  <span>Image Ad</span>
-                </button>
-                <button
-                  onClick={() => setGenMode('video')}
-                  className={`flex items-center justify-center space-x-2 px-3 py-3 rounded-xl text-sm font-bold transition-all ${
-                    genMode === 'video' 
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
-                      : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
-                  }`}
+                  <option value="1K">1K Quality</option>
+                  <option value="2K">2K Ultra</option>
+                  <option value="4K">4K Extreme</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Ratio</label>
+                <select 
+                  value={aspectRatio} 
+                  onChange={(e) => setAspectRatio(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
-                  <Video size={18} />
-                  <span>Video Ad</span>
-                </button>
+                  {['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'].map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
               </div>
             </div>
-
-            {genMode === 'video' && (
-              <div>
-                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Aspect Ratio</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setVideoAspectRatio('16:9')}
-                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                      videoAspectRatio === '16:9' 
-                        ? 'bg-zinc-200 text-black' 
-                        : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
-                    }`}
-                  >
-                    Landscape (16:9)
-                  </button>
-                  <button
-                    onClick={() => setVideoAspectRatio('9:16')}
-                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                      videoAspectRatio === '9:16' 
-                        ? 'bg-zinc-200 text-black' 
-                        : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
-                    }`}
-                  >
-                    Portrait (9:16)
-                  </button>
-                </div>
-              </div>
-            )}
 
             <div>
               <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Target Platform</label>
@@ -254,274 +235,209 @@ const Studio: React.FC<StudioProps> = ({ activeBrand }) => {
                   <button
                     key={p}
                     onClick={() => setPlatform(p)}
-                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${
                       platform === p 
-                        ? 'bg-zinc-700 text-white' 
+                        ? 'bg-indigo-600 text-white' 
                         : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
                     }`}
                   >
-                    {p.charAt(0).toUpperCase() + p.slice(1)}
+                    {p.toUpperCase()}
                   </button>
                 ))}
               </div>
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Ad Brief & Context</label>
+              <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Campaign Brief</label>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder={genMode === 'video' ? "Describe the scene, movement, and product..." : "Describe the look and feel of your ad..."}
-                className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-all"
+                placeholder="Describe your product (e.g., 'Modern minimalist smartwatch for Gen Z')..."
+                className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-all"
               />
             </div>
 
-            <div className="space-y-3">
-              <button
-                onClick={handleGenerate}
-                disabled={isGenerating || !prompt}
-                className={`w-full py-4 font-bold rounded-xl flex flex-col items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                  genMode === 'video' ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-white text-black hover:bg-zinc-200'
-                }`}
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="animate-spin mb-1" size={20} />
-                    <span className="text-[10px] uppercase tracking-widest animate-pulse">{genStatus || 'Processing...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex items-center space-x-2">
-                      {genMode === 'video' ? <Video size={20} /> : <Sparkles size={20} />}
-                      <span>{genMode === 'video' ? 'Craft Video Ad' : 'Craft Static Ad'}</span>
-                    </div>
-                  </>
-                )}
-              </button>
-              
-              {genMode === 'video' && (
-                <div className="flex items-center justify-center space-x-2 text-[10px] text-zinc-500">
-                  <AlertCircle size={12} />
-                  <span>Veo 3.1 requires a <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline text-indigo-400 flex items-center gap-0.5">paid API key <ExternalLink size={8} /></a></span>
-                </div>
-              )}
-            </div>
+            <button
+              onClick={handleGenerate}
+              disabled={isGenerating || !prompt}
+              className="w-full py-4 bg-white text-black font-black rounded-xl flex items-center justify-center space-x-2 hover:bg-zinc-200 transition-all disabled:opacity-50"
+            >
+              {isGenerating ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} />}
+              <span>{isGenerating ? 'Synthesizing...' : 'Generate Campaign'}</span>
+            </button>
           </div>
         </div>
 
         {adImage && (
-          <div className="glass-effect p-6 rounded-2xl border border-zinc-800 space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Canvas Controls</h3>
-              <button onClick={resetEdits} className="text-zinc-500 hover:text-white transition-colors">
-                <Eraser size={16} />
+          <div className="glass-effect p-6 rounded-2xl border border-indigo-500/30 bg-indigo-500/5 space-y-4">
+            <h3 className="text-sm font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
+              <Wand2 size={16} />
+              AI Magic Edit
+            </h3>
+            <div className="relative">
+              <input 
+                type="text"
+                value={magicPrompt}
+                onChange={(e) => setMagicPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAIEdit()}
+                placeholder="Ex: 'Add retro filter' or 'Remove person'..."
+                className="w-full bg-zinc-900/80 border border-zinc-800 rounded-xl pl-4 pr-12 py-3 text-sm text-white focus:outline-none transition-all"
+              />
+              <button onClick={handleAIEdit} disabled={isMagicEditing || !magicPrompt} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-lg disabled:opacity-50">
+                {isMagicEditing ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
               </button>
             </div>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs"><span className="text-zinc-400">Brightness</span><span className="text-zinc-200">{brightness}%</span></div>
-                <input type="range" min="0" max="200" value={brightness} onChange={(e) => setBrightness(parseInt(e.target.value))} className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs"><span className="text-zinc-400">Zoom</span><span className="text-zinc-200">{Math.round(zoom * 100)}%</span></div>
-                <input type="range" min="100" max="300" value={zoom * 100} onChange={(e) => setZoom(parseInt(e.target.value) / 100)} className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
-              </div>
-              <button onClick={handleRotate} className="w-full flex items-center justify-center gap-2 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-sm font-medium transition-all">
-                <RotateCw size={16} />
-                <span>Rotate Canvas</span>
-              </button>
-            </div>
+            <button 
+              onClick={handleAnalyze} 
+              disabled={isAnalyzing}
+              className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
+            >
+              {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+              Analyze with Gemini Pro
+            </button>
           </div>
         )}
 
-        {adContent && (
-          <div className="glass-effect p-6 rounded-2xl border border-zinc-800 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">AI Content</h3>
-              <button onClick={handleRefine} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 transition-colors" title="Refine Copy">
-                <RefreshCcw size={16} />
-              </button>
-            </div>
+        {adImage && (
+          <div className="glass-effect p-6 rounded-2xl border border-zinc-800 space-y-6">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              <Settings2 size={16} /> Fine-Tuning
+            </h3>
             <div className="space-y-4">
-              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
-                <p className="text-[10px] text-zinc-500 mb-1 font-bold uppercase tracking-wider">Headline</p>
-                <p className="text-zinc-200 font-medium">{adContent.headline}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setIsCropMode(!isCropMode)} className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all ${isCropMode ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
+                  <CropIcon size={14} /> {isCropMode ? 'Exit Crop' : 'Crop'}
+                </button>
+                <button onClick={handleRotate} className="flex items-center justify-center gap-2 py-2.5 bg-zinc-800 text-zinc-200 rounded-xl text-xs font-bold transition-all">
+                  <RotateCw size={14} /> Rotate
+                </button>
               </div>
-              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
-                <p className="text-[10px] text-zinc-500 mb-1 font-bold uppercase tracking-wider">Caption</p>
-                <p className="text-zinc-200 text-sm leading-relaxed">{adContent.caption}</p>
+
+              {isCropMode && (
+                <div className="flex gap-2">
+                  <button onClick={applyCrop} className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-black uppercase">Apply</button>
+                  <button onClick={() => setIsCropMode(false)} className="flex-1 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase">Cancel</button>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Brightness</span><span>{brightness}%</span></div>
+                  <input type="range" min="0" max="200" value={brightness} onChange={(e) => setBrightness(parseInt(e.target.value))} className="w-full h-1 accent-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Contrast</span><span>{contrast}%</span></div>
+                  <input type="range" min="0" max="200" value={contrast} onChange={(e) => setContrast(parseInt(e.target.value))} className="w-full h-1 accent-indigo-500" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Zoom</span><span>{Math.round(zoom*100)}%</span></div>
+                  <input type="range" min="100" max="300" value={zoom*100} onChange={(e) => setZoom(parseInt(e.target.value)/100)} className="w-full h-1 accent-indigo-500" />
+                </div>
               </div>
-              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
-                <p className="text-[10px] text-zinc-500 mb-1 font-bold uppercase tracking-wider">CTA</p>
-                <p className="text-zinc-200 font-medium">{adContent.cta}</p>
-              </div>
-              
-              <button 
-                onClick={handleRefine}
-                disabled={isGenerating}
-                className="w-full flex items-center justify-center space-x-2 py-3 bg-zinc-800 hover:bg-zinc-700 text-indigo-400 rounded-xl text-xs font-bold transition-all border border-zinc-700/50 disabled:opacity-50"
-              >
-                {isGenerating ? <Loader2 className="animate-spin" size={14} /> : <Wand2 size={14} />}
-                <span>Refine Ad Copy</span>
-              </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Preview Area */}
-      <div className="lg:col-span-8 flex flex-col space-y-6">
-        <div className="glass-effect flex-1 min-h-[600px] rounded-3xl border border-zinc-800 flex flex-col overflow-hidden shadow-2xl relative">
-          <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20 backdrop-blur-md z-10">
+      {/* Preview Section */}
+      <div className="lg:col-span-8 flex flex-col">
+        <div className="flex-1 glass-effect rounded-3xl border border-zinc-800 flex flex-col overflow-hidden relative">
+          <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between z-10 bg-black/40 backdrop-blur-md">
             <div className="flex items-center space-x-4">
-              <span className="text-zinc-400 font-bold uppercase text-[10px] tracking-[0.2em]">Ad Preview</span>
-              <div className="h-4 w-[1px] bg-zinc-800"></div>
+              <span className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500">Live Preview</span>
               <div className="flex space-x-2">
-                <button className="p-2 bg-zinc-800 text-indigo-400 rounded-lg"><Smartphone size={16} /></button>
-                <button className="p-2 text-zinc-600 hover:text-white transition-colors"><Monitor size={16} /></button>
+                <button className="p-2 bg-zinc-800 rounded-lg text-indigo-400"><Smartphone size={16} /></button>
+                <button className="p-2 text-zinc-500 hover:bg-zinc-800 rounded-lg"><Monitor size={16} /></button>
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              {adVideo && (
-                <a 
-                  href={adVideo} 
-                  download="marketing-ad.mp4"
-                  className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg"
-                >
-                  <Download size={14} />
-                  <span>Download MP4</span>
-                </a>
-              )}
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center space-x-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-colors"
-              >
-                <Upload size={14} />
-                <span>Upload Base</span>
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-bold transition-all">
+                <Upload size={14} /> <span>Upload</span>
               </button>
               <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept="image/*" />
             </div>
           </div>
 
-          <div className="flex-1 bg-black flex items-center justify-center p-12 overflow-hidden">
-            <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)', backgroundSize: '40px 40px' }}></div>
-            
-            <div 
-              ref={containerRef}
-              onMouseDown={onMouseDown}
-              className={`relative ${videoAspectRatio === '9:16' ? 'h-full aspect-[9/16]' : 'w-full max-w-[700px] aspect-[16/9]'} bg-zinc-900 rounded-2xl shadow-[0_40px_100px_rgba(0,0,0,0.8)] overflow-hidden border border-zinc-800/50 group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          <div className="flex-1 bg-zinc-950 p-10 flex items-center justify-center overflow-hidden">
+             <div 
+              ref={cropContainerRef}
+              className={`relative bg-zinc-900 rounded-2xl shadow-2xl overflow-hidden border border-zinc-800 group transition-all duration-500`}
+              style={{
+                width: aspectRatio.split(':')[0] === aspectRatio.split(':')[1] ? '400px' : (parseInt(aspectRatio.split(':')[0]) > parseInt(aspectRatio.split(':')[1]) ? '500px' : '320px'),
+                aspectRatio: aspectRatio.replace(':', '/')
+              }}
+              onMouseMove={onDrag}
+              onMouseUp={stopDrag}
+              onMouseLeave={stopDrag}
             >
-              {(adImage || adVideo) ? (
+              {adImage ? (
                 <>
                   <div className="w-full h-full overflow-hidden flex items-center justify-center bg-black">
-                    {adVideo ? (
-                      <video 
-                        src={adVideo} 
-                        className="w-full h-full object-cover" 
-                        autoPlay 
-                        loop 
-                        muted 
-                        playsInline
-                      />
-                    ) : (
-                      <img 
-                        src={adImage!} 
-                        alt="Preview" 
-                        className="max-w-none transition-filter duration-300 select-none pointer-events-none" 
-                        style={{
-                          filter: `brightness(${brightness}%) contrast(${contrast}%)`,
-                          transform: `translate(${posX}px, ${posY}px) rotate(${rotation}deg) scale(${zoom})`,
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                    )}
+                    <img 
+                      ref={imageRef}
+                      src={adImage} 
+                      alt="Ad Visual" 
+                      className="w-full h-full object-cover transition-all duration-700 ease-out" 
+                      style={{
+                        filter: `brightness(${brightness}%) contrast(${contrast}%)`,
+                        transform: `rotate(${rotation}deg) scale(${zoom})`,
+                        pointerEvents: isCropMode ? 'none' : 'auto'
+                      }}
+                    />
                   </div>
-                  
-                  {/* Brand Overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent pointer-events-none p-8 flex flex-col justify-end">
-                    <div className="space-y-4 transform transition-all group-hover:translate-y-[-10px]">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shadow-lg" style={{ backgroundColor: activeBrand?.colors[0] || '#6366f1', color: '#fff' }}>
-                          {activeBrand?.name.charAt(0) || 'A'}
-                        </div>
-                        <span className="text-sm font-bold tracking-tight text-white drop-shadow-lg">{activeBrand?.name || 'Your Brand'}</span>
-                      </div>
-                      <h2 className="text-4xl font-black leading-[0.9] uppercase tracking-tighter text-white drop-shadow-2xl">
-                        {adContent?.headline || 'Ready to Scale?'}
-                      </h2>
-                      <p className="text-sm text-zinc-300 line-clamp-2 leading-relaxed drop-shadow-lg max-w-[85%] font-medium">
-                        {adContent?.caption || 'Our AI engine transforms your brief into a high-converting creative.'}
-                      </p>
-                      <button 
-                        className="w-full py-4 font-black rounded-xl text-xs mt-2 shadow-[0_20px_50px_rgba(0,0,0,0.4)] pointer-events-auto transition-all active:scale-95 hover:opacity-90"
-                        style={{ backgroundColor: activeBrand?.colors[0] || '#fff', color: activeBrand?.colors[0] === '#ffffff' ? '#000' : '#fff' }}
+                  {isCropMode && (
+                    <div className="absolute inset-0 bg-black/60 z-30 cursor-crosshair">
+                      <div 
+                        className="absolute border-2 border-indigo-400 cursor-move"
+                        style={{ left: `${cropArea.x}%`, top: `${cropArea.y}%`, width: `${cropArea.width}%`, height: `${cropArea.height}%`, boxShadow: '0 0 0 1000px rgba(0,0,0,0.6)' }}
+                        onMouseDown={startDrag}
                       >
-                        {adContent?.cta || 'Shop Now'}
-                      </button>
+                        <div className="absolute -top-1 -left-1 w-2 h-2 bg-indigo-400"></div>
+                        <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-indigo-400"></div>
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {!isCropMode && (
+                    <>
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent pointer-events-none"></div>
+                      <div className="absolute inset-0 p-6 flex flex-col justify-end text-white">
+                        <div className="space-y-2 animate-in fade-in slide-in-from-bottom-4">
+                          <h2 className="text-2xl font-black leading-tight drop-shadow-xl">{adContent?.headline || 'Your Headline'}</h2>
+                          <p className="text-xs opacity-80 line-clamp-2 drop-shadow-md">{adContent?.caption || 'Marketing message...'}</p>
+                          <button className="w-full py-3 bg-white text-black font-black rounded-lg text-xs mt-2 transition-transform active:scale-95 shadow-2xl">
+                            {adContent?.cta || 'Shop Now'}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </>
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-zinc-700 p-12 text-center bg-zinc-950/50">
-                  <div className="w-20 h-20 bg-zinc-900/50 rounded-3xl flex items-center justify-center mb-6 border border-zinc-800">
-                    {genMode === 'video' ? <Video size={32} className="opacity-10" /> : <ImageIcon size={32} className="opacity-10" />}
-                  </div>
-                  <h4 className="text-zinc-500 font-bold text-base mb-2">Workspace Empty</h4>
-                  <p className="text-xs opacity-40 max-w-[200px]">Define your vision in the panel to begin the creation process.</p>
+                <div className="w-full h-full flex flex-col items-center justify-center text-zinc-700">
+                  <LayoutTemplate size={48} className="opacity-20 mb-4" />
+                  <p className="text-xs font-black uppercase tracking-widest">Ready to Build</p>
                 </div>
               )}
               
-              {isGenerating && (
-                <div className="absolute inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-50 pointer-events-auto">
-                  <div className="text-center space-y-8 px-12">
-                    <div className="relative inline-block">
-                       <Loader2 className="animate-spin text-indigo-500" size={80} strokeWidth={1} />
-                       <div className="absolute inset-0 flex items-center justify-center">
-                         <Sparkles className="text-white animate-pulse" size={24} />
-                       </div>
-                    </div>
-                    <div className="space-y-3">
-                      <p className="text-white text-2xl font-black tracking-tighter uppercase">Generative Engine Active</p>
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="h-1 w-12 bg-indigo-600 rounded-full animate-pulse"></div>
-                        <p className="text-indigo-400 text-xs font-bold uppercase tracking-[0.3em]">{genStatus}</p>
-                        <div className="h-1 w-12 bg-indigo-600 rounded-full animate-pulse"></div>
-                      </div>
-                    </div>
-                    {genMode === 'video' && (
-                      <div className="p-4 bg-zinc-900/50 rounded-2xl border border-zinc-800 max-w-sm mx-auto">
-                        <p className="text-[10px] text-zinc-500 leading-normal uppercase font-bold tracking-widest">
-                          Video rendering is a intensive process.<br/>Average wait: 90 seconds.
-                        </p>
-                      </div>
-                    )}
+              {(isGenerating || isMagicEditing) && (
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-40">
+                  <div className="text-center space-y-3">
+                    <Loader2 className="animate-spin text-indigo-500 mx-auto" size={32} />
+                    <p className="text-white text-xs font-black uppercase tracking-widest">Gemini Engine Running</p>
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="p-6 border-t border-zinc-800 flex items-center justify-between bg-zinc-950/80 backdrop-blur-sm">
-            <div className="flex items-center space-x-6">
-              <div className="flex items-center space-x-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Optimizing Conversion</span>
-              </div>
-              <div className="flex items-center space-x-2 text-zinc-600">
-                <CheckCircle2 size={14} className="text-indigo-500" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Asset Ready for Export</span>
-              </div>
+          <div className="p-6 border-t border-zinc-800 flex items-center justify-between bg-zinc-900/40 z-10">
+            <div className="flex space-x-6">
+               <div className="flex items-center space-x-2 text-zinc-500"><CheckCircle2 size={14} className="text-emerald-500" /><span className="text-[10px] font-black uppercase tracking-widest">HQ Export Ready</span></div>
+               <div className="flex items-center space-x-2 text-zinc-500"><CheckCircle2 size={14} className="text-emerald-500" /><span className="text-[10px] font-black uppercase tracking-widest">Safe Assets</span></div>
             </div>
-            <div className="flex space-x-3">
-              <button className="px-6 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl text-xs font-bold transition-all border border-zinc-800">
-                Save Draft
-              </button>
-              <button className="px-8 py-2.5 bg-white text-black hover:bg-zinc-200 rounded-xl text-xs font-black shadow-xl transition-all flex items-center space-x-2 active:scale-95">
-                <span>Deploy Campaign</span>
-                <Send size={14} />
-              </button>
+            <div className="flex space-x-4">
+              <button className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold transition-all">Export</button>
+              <button className="px-8 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/20 transition-all">Launch Campaign</button>
             </div>
           </div>
         </div>
