@@ -2,8 +2,6 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AdSuggestion, Platform, BrandSettings } from "../types";
 
-const API_KEY = process.env.API_KEY || '';
-
 export const getGeminiClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
@@ -131,29 +129,30 @@ export const generateAdImage = async (prompt: string, brandSettings?: BrandSetti
 
 /**
  * Generates a video using Veo 3.1 models.
- * Handles API key selection check and polling.
  */
 export const generateAdVideo = async (
   prompt: string, 
   aspectRatio: '16:9' | '9:16' = '16:9',
   onStatusUpdate?: (status: string) => void
 ): Promise<string | null> => {
-  // 1. Check for API key selection (Mandatory for Veo)
+  // Check for API key selection (Mandatory for Veo)
   // @ts-ignore
-  if (!(await window.aistudio.hasSelectedApiKey())) {
+  const hasKey = await window.aistudio.hasSelectedApiKey();
+  if (!hasKey) {
     onStatusUpdate?.("Waiting for API Key selection...");
     // @ts-ignore
     await window.aistudio.openSelectKey();
-    // Proceeding assuming selection was successful (mitigating race condition)
+    // Proceed assuming the key was selected successfully (mitigating race condition)
   }
 
+  // Create new instance before call to ensure latest key is used
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
     onStatusUpdate?.("Starting video generation engine...");
     let operation = await ai.models.generateVideos({
       model: 'veo-3.1-fast-generate-preview',
-      prompt: `Cinematic commercial video: ${prompt}. High quality, 4k, professional advertising style.`,
+      prompt: `Cinematic professional commercial video for a brand: ${prompt}. High production value, smooth transitions, sharp focus.`,
       config: {
         numberOfVideos: 1,
         resolution: '720p',
@@ -161,23 +160,24 @@ export const generateAdVideo = async (
       }
     });
 
-    onStatusUpdate?.("AI is crafting your video frames (this may take 1-2 mins)...");
+    onStatusUpdate?.("AI is crafting scenes (usually takes 1-2 mins)...");
 
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 10000));
       // @ts-ignore
       operation = await ai.operations.getVideosOperation({ operation: operation });
-      onStatusUpdate?.("Refining scenes and textures...");
+      onStatusUpdate?.("Rendering textures and motion...");
     }
 
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
     if (!downloadLink) return null;
 
-    onStatusUpdate?.("Finalizing download...");
+    onStatusUpdate?.("Finalizing video file...");
     const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
     const blob = await response.blob();
     return URL.createObjectURL(blob);
   } catch (error: any) {
+    // If entity not found, key might be invalid/expired, ask to select again
     if (error.message?.includes("Requested entity was not found")) {
       // @ts-ignore
       await window.aistudio.openSelectKey();

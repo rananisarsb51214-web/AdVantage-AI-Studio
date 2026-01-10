@@ -1,7 +1,7 @@
 {
-  "name": "AdVantage AI Studio",
-  "description": "A comprehensive AI-powered advertisement creation platform that generates commercial ads, optimizes designs, and manages multi-platform campaigns using Gemini's multimodal capabilities.",
   "requestFramePermissions": [
     "camera"
-  ]
+  ],
+  "name": "",
+  "description": ""
 }
