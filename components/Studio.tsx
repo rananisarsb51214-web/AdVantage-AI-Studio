@@ -20,9 +20,12 @@ import {
   Check,
   X,
   Eye,
-  Settings2
+  Settings2,
+  Volume2,
+  Mic,
+  MicOff
 } from 'lucide-react';
-import { generateAdContent, generateHighQualityImage, editAdImage, analyzeMedia } from '../services/gemini';
+import { generateAdContent, generateHighQualityImage, editAdImage, analyzeMedia, textToSpeech, transcribeAudio } from '../services/gemini';
 import { Platform, AdSuggestion } from '../types';
 
 interface CropArea {
@@ -39,6 +42,8 @@ const Studio: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isMagicEditing, setIsMagicEditing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [adContent, setAdContent] = useState<AdSuggestion | null>(null);
   const [adImage, setAdImage] = useState<string | null>(null);
   const [originalAdImage, setOriginalAdImage] = useState<string | null>(null);
@@ -47,6 +52,8 @@ const Studio: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const cropContainerRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Image Edit States
   const [brightness, setBrightness] = useState(100);
@@ -76,6 +83,57 @@ const Studio: React.FC = () => {
       console.error("Generation failed", error);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = (reader.result as string).split(',')[1];
+          setIsTranscribing(true);
+          const text = await transcribeAudio(base64);
+          setPrompt(prev => prev ? prev + ' ' + text : text);
+          setIsTranscribing(false);
+        };
+        reader.readAsDataURL(audioBlob);
+      };
+      recorder.start();
+      setIsTranscribing(true);
+    } catch (err) {
+      console.error("Mic access failed", err);
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setIsTranscribing(false);
+  };
+
+  const handleTTS = async (text: string) => {
+    if (isSpeaking) return;
+    setIsSpeaking(true);
+    try {
+      const buffer = await textToSpeech(text);
+      if (buffer) {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioBuffer = await ctx.decodeAudioData(buffer);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        source.onended = () => setIsSpeaking(false);
+        source.start();
+      }
+    } catch (e) {
+      console.error(e);
+      setIsSpeaking(false);
     }
   };
 
@@ -197,25 +255,25 @@ const Studio: React.FC = () => {
         <div className="glass-effect p-6 rounded-2xl border border-zinc-800">
           <h3 className="text-lg font-bold text-white mb-4 flex items-center">
             <Sparkles className="mr-2 text-indigo-400" size={18} />
-            AI Creator (Pro)
+            Creative Lab (Pro)
           </h3>
           
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Resolution</label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Image Quality</label>
                 <select 
                   value={imageSize} 
                   onChange={(e) => setImageSize(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
-                  <option value="1K">1K Quality</option>
+                  <option value="1K">1K High</option>
                   <option value="2K">2K Ultra</option>
                   <option value="4K">4K Extreme</option>
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Ratio</label>
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Target Ratio</label>
                 <select 
                   value={aspectRatio} 
                   onChange={(e) => setAspectRatio(e.target.value)}
@@ -229,41 +287,32 @@ const Studio: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Target Platform</label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['instagram', 'facebook', 'tiktok'] as Platform[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPlatform(p)}
-                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${
-                      platform === p 
-                        ? 'bg-indigo-600 text-white' 
-                        : 'bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
-                    }`}
-                  >
-                    {p.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
               <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Campaign Brief</label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Describe your product (e.g., 'Modern minimalist smartwatch for Gen Z')..."
-                className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-all"
-              />
+              <div className="relative group">
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Describe your product vision..."
+                  className="w-full h-28 bg-zinc-900 border border-zinc-800 rounded-xl p-4 pr-12 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-all"
+                />
+                <button 
+                  onMouseDown={startRecording}
+                  onMouseUp={stopRecording}
+                  className={`absolute right-3 top-3 p-2 rounded-lg transition-all ${isTranscribing ? 'bg-red-500 text-white animate-pulse' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}
+                  title="Hold to dictate (Gemini Transcription)"
+                >
+                  {isTranscribing ? <MicOff size={16} /> : <Mic size={16} />}
+                </button>
+              </div>
             </div>
 
             <button
               onClick={handleGenerate}
               disabled={isGenerating || !prompt}
-              className="w-full py-4 bg-white text-black font-black rounded-xl flex items-center justify-center space-x-2 hover:bg-zinc-200 transition-all disabled:opacity-50"
+              className="w-full py-4 bg-white text-black font-black rounded-xl flex items-center justify-center space-x-2 hover:bg-zinc-200 transition-all shadow-2xl disabled:opacity-50"
             >
               {isGenerating ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} />}
-              <span>{isGenerating ? 'Synthesizing...' : 'Generate Campaign'}</span>
+              <span>{isGenerating ? 'Synthesizing...' : 'Generate Assets'}</span>
             </button>
           </div>
         </div>
@@ -293,46 +342,41 @@ const Studio: React.FC = () => {
               className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
             >
               {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-              Analyze with Gemini Pro
+              Vision Analysis (Pro)
             </button>
           </div>
         )}
 
-        {adImage && (
-          <div className="glass-effect p-6 rounded-2xl border border-zinc-800 space-y-6">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Settings2 size={16} /> Fine-Tuning
-            </h3>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setIsCropMode(!isCropMode)} className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all ${isCropMode ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
-                  <CropIcon size={14} /> {isCropMode ? 'Exit Crop' : 'Crop'}
+        {adContent && (
+          <div className="glass-effect p-6 rounded-2xl border border-zinc-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">AI Ad Copy</h3>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handleTTS(adContent.caption)} 
+                  disabled={isSpeaking}
+                  className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 transition-colors"
+                >
+                  {isSpeaking ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={16} />}
                 </button>
-                <button onClick={handleRotate} className="flex items-center justify-center gap-2 py-2.5 bg-zinc-800 text-zinc-200 rounded-xl text-xs font-bold transition-all">
-                  <RotateCw size={14} /> Rotate
+                <button onClick={handleRefine} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 transition-colors">
+                  <RefreshCcw size={16} />
                 </button>
               </div>
-
-              {isCropMode && (
-                <div className="flex gap-2">
-                  <button onClick={applyCrop} className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-black uppercase">Apply</button>
-                  <button onClick={() => setIsCropMode(false)} className="flex-1 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-[10px] font-black uppercase">Cancel</button>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Brightness</span><span>{brightness}%</span></div>
-                  <input type="range" min="0" max="200" value={brightness} onChange={(e) => setBrightness(parseInt(e.target.value))} className="w-full h-1 accent-indigo-500" />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Contrast</span><span>{contrast}%</span></div>
-                  <input type="range" min="0" max="200" value={contrast} onChange={(e) => setContrast(parseInt(e.target.value))} className="w-full h-1 accent-indigo-500" />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase"><span>Zoom</span><span>{Math.round(zoom*100)}%</span></div>
-                  <input type="range" min="100" max="300" value={zoom*100} onChange={(e) => setZoom(parseInt(e.target.value)/100)} className="w-full h-1 accent-indigo-500" />
-                </div>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <p className="text-xs text-zinc-500 mb-1">Headline</p>
+                <p className="text-zinc-200 font-medium">{adContent.headline}</p>
+              </div>
+              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <p className="text-xs text-zinc-500 mb-1">Caption</p>
+                <p className="text-zinc-200 text-sm leading-relaxed">{adContent.caption}</p>
+              </div>
+              <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                <p className="text-xs text-zinc-500 mb-1">CTA</p>
+                <p className="text-zinc-200 font-medium">{adContent.cta}</p>
               </div>
             </div>
           </div>
@@ -340,19 +384,19 @@ const Studio: React.FC = () => {
       </div>
 
       {/* Preview Section */}
-      <div className="lg:col-span-8 flex flex-col">
+      <div className="lg:col-span-8 flex flex-col h-full">
         <div className="flex-1 glass-effect rounded-3xl border border-zinc-800 flex flex-col overflow-hidden relative">
           <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between z-10 bg-black/40 backdrop-blur-md">
             <div className="flex items-center space-x-4">
-              <span className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500">Live Preview</span>
+              <span className="text-xs font-black uppercase tracking-[0.2em] text-zinc-500">Output Rendering</span>
               <div className="flex space-x-2">
-                <button className="p-2 bg-zinc-800 rounded-lg text-indigo-400"><Smartphone size={16} /></button>
-                <button className="p-2 text-zinc-500 hover:bg-zinc-800 rounded-lg"><Monitor size={16} /></button>
+                <button onClick={() => setPlatform('instagram')} className={`p-2 rounded-lg transition-colors ${platform === 'instagram' ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:bg-zinc-800'}`}><Smartphone size={16} /></button>
+                <button onClick={() => setPlatform('facebook')} className={`p-2 rounded-lg transition-colors ${platform === 'facebook' ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:bg-zinc-800'}`}><Monitor size={16} /></button>
               </div>
             </div>
             <div className="flex items-center space-x-3">
               <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-bold transition-all">
-                <Upload size={14} /> <span>Upload</span>
+                <Upload size={14} /> <span>Asset Manager</span>
               </button>
               <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept="image/*" />
             </div>
@@ -402,10 +446,10 @@ const Studio: React.FC = () => {
                       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent pointer-events-none"></div>
                       <div className="absolute inset-0 p-6 flex flex-col justify-end text-white">
                         <div className="space-y-2 animate-in fade-in slide-in-from-bottom-4">
-                          <h2 className="text-2xl font-black leading-tight drop-shadow-xl">{adContent?.headline || 'Your Headline'}</h2>
-                          <p className="text-xs opacity-80 line-clamp-2 drop-shadow-md">{adContent?.caption || 'Marketing message...'}</p>
+                          <h2 className="text-2xl font-black leading-tight drop-shadow-xl">{adContent?.headline || 'High Performance'}</h2>
+                          <p className="text-xs opacity-80 line-clamp-2 drop-shadow-md">{adContent?.caption || 'Automated copy generation active...'}</p>
                           <button className="w-full py-3 bg-white text-black font-black rounded-lg text-xs mt-2 transition-transform active:scale-95 shadow-2xl">
-                            {adContent?.cta || 'Shop Now'}
+                            {adContent?.cta || 'Explore Now'}
                           </button>
                         </div>
                       </div>
@@ -415,7 +459,7 @@ const Studio: React.FC = () => {
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center text-zinc-700">
                   <LayoutTemplate size={48} className="opacity-20 mb-4" />
-                  <p className="text-xs font-black uppercase tracking-widest">Ready to Build</p>
+                  <p className="text-xs font-black uppercase tracking-widest">Engine Ready</p>
                 </div>
               )}
               
@@ -423,7 +467,7 @@ const Studio: React.FC = () => {
                 <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-40">
                   <div className="text-center space-y-3">
                     <Loader2 className="animate-spin text-indigo-500 mx-auto" size={32} />
-                    <p className="text-white text-xs font-black uppercase tracking-widest">Gemini Engine Running</p>
+                    <p className="text-white text-xs font-black uppercase tracking-widest">Gemini Processing</p>
                   </div>
                 </div>
               )}
@@ -432,12 +476,12 @@ const Studio: React.FC = () => {
 
           <div className="p-6 border-t border-zinc-800 flex items-center justify-between bg-zinc-900/40 z-10">
             <div className="flex space-x-6">
-               <div className="flex items-center space-x-2 text-zinc-500"><CheckCircle2 size={14} className="text-emerald-500" /><span className="text-[10px] font-black uppercase tracking-widest">HQ Export Ready</span></div>
+               <div className="flex items-center space-x-2 text-zinc-500"><CheckCircle2 size={14} className="text-emerald-500" /><span className="text-[10px] font-black uppercase tracking-widest">HQ Render</span></div>
                <div className="flex items-center space-x-2 text-zinc-500"><CheckCircle2 size={14} className="text-emerald-500" /><span className="text-[10px] font-black uppercase tracking-widest">Safe Assets</span></div>
             </div>
             <div className="flex space-x-4">
-              <button className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold transition-all">Export</button>
-              <button className="px-8 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/20 transition-all">Launch Campaign</button>
+              <button className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-bold transition-all">Download</button>
+              <button className="px-8 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/20 transition-all">Go Live</button>
             </div>
           </div>
         </div>
