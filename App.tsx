@@ -12,6 +12,7 @@ import {
   Mic,
   Key
 } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/react';
 import Dashboard from './components/Dashboard';
 import Studio from './components/Studio';
 import AssetLibrary from './components/AssetLibrary';
@@ -65,13 +66,14 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside 
-        className={`${
-          isSidebarOpen ? 'w-64' : 'w-20'
-        } glass-effect border-r border-zinc-800 transition-all duration-300 hidden md:flex flex-col z-50`}
-      >
+    <>
+      <div className="flex h-screen overflow-hidden">
+        {/* Sidebar */}
+        <aside 
+          className={`${
+            isSidebarOpen ? 'w-64' : 'w-20'
+          } glass-effect border-r border-zinc-800 transition-all duration-300 hidden md:flex flex-col z-50`}
+        >
         <div className="p-6 flex items-center space-x-3">
           <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center neon-glow">
             <Zap className="text-white" size={24} fill="white" />
@@ -157,6 +159,8 @@ const App: React.FC = () => {
         </div>
       </main>
     </div>
+    <Analytics />
+  </>
   );
 };
 
